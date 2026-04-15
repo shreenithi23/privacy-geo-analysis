@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Geo Privacy Dashboard</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <style>
+        #map { height: 100vh; }
+
+        .legend {
+            background: white;
+            padding: 10px;
+            line-height: 1.5em;
+        }
+
+        .legend i {
+            width: 18px;
+            height: 18px;
+            float: left;
+            margin-right: 8px;
+            opacity: 0.7;
+        }
+
+        button {
+            padding: 6px 10px;
+            cursor: pointer;
+            border: none;
+            background: #333;
+            color: white;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+<script>
+    const map = L.map('map').setView([12.97, 77.59], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: 'OSM'
+    }).addTo(map);
+
+    fetch("http://127.0.0.1:8000/stats")
+        .then(res => res.json())
+        .then(data => {
+
+            console.log("DATA:", data);
+
+            if (data.length > 0) {
+                map.setView([data[0].lat, data[0].lon], 13);
+            }
+
+            const GRID_SIZE = 0.01;
+            const maxCount = Math.max(...data.map(d => d.count));
+
+            // ---------------- GRID RECTANGLES ----------------
+            data.forEach(cell => {
+
+                const bounds = [
+                    [cell.lat - GRID_SIZE/2, cell.lon - GRID_SIZE/2],
+                    [cell.lat + GRID_SIZE/2, cell.lon + GRID_SIZE/2]
+                ];
+
+                let color;
+
+                if (!cell.safe) {
+                    color = "gray";
+                } else {
+                    const intensity = cell.count / maxCount;
+
+                    if (intensity > 0.7) color = "red";
+                    else if (intensity > 0.4) color = "orange";
+                    else color = "green";
+                }
+
+                const rect = L.rectangle(bounds, {
+                    color: color,
+                    weight: 1,
+                    fillOpacity: 0.5
+                }).addTo(map);
+
+                rect.bindPopup(`
+                    <b>Grid:</b> ${cell.grid_id} <br>
+                    <b>Users:</b> ${cell.count} <br>
+                    <b>Status:</b> ${cell.safe ? "Safe" : "Suppressed"}
+                `);
+
+                rect.on("click", () => {
+                    if (!cell.safe) {
+                        alert("This grid is suppressed due to privacy (k-anonymity)");
+                        return;
+                    }
+
+                    fetch(`http://127.0.0.1:8000/query?user_id=1&grid_id=${cell.grid_id}&operation=count`, {
+                        method: "POST"
+                    })
+                    .then(res => res.json())
+                    .then(result => {
+                        alert(`Users in grid: ${result.result}`);
+                    });
+                });
+
+            });
+
+            // ---------------- HEATMAP ----------------
+            const heatData = data.map(cell => [
+                cell.lat,
+                cell.lon,
+                cell.count
+            ]);
+
+            const heatLayer = L.heatLayer(heatData, {
+    radius: 20,
+    blur: 10,
+    maxZoom: 17,
+    max: maxCount
+});
+
+            // ---------------- TOGGLE BUTTON ----------------
+            let heatOn = true;
+
+            const toggleControl = L.control({ position: 'topright' });
+
+            toggleControl.onAdd = function () {
+                const div = L.DomUtil.create('div', 'legend');
+                div.innerHTML = `<button id="toggleHeat">Heatmap</button>`;
+                return div;
+            };
+
+            toggleControl.addTo(map);
+
+            document.addEventListener("click", function(e) {
+                if (e.target && e.target.id === "toggleHeat") {
+                    if (heatOn) {
+                        map.removeLayer(heatLayer);
+                    } else {
+                        map.addLayer(heatLayer);
+                    }
+                    heatOn = !heatOn;
+                }
+            });
+
+            // ---------------- LEGEND ----------------
+            const legend = L.control({position: 'bottomright'});
+
+            legend.onAdd = function () {
+                const div = L.DomUtil.create('div', 'legend');
+                div.innerHTML = `
+                    <b>Density</b><br>
+                    <i style="background: green"></i> Low<br>
+                    <i style="background: orange"></i> Medium<br>
+                    <i style="background: red"></i> High<br>
+                    <i style="background: gray"></i> Suppressed
+                `;
+                return div;
+            };
+
+            legend.addTo(map);
+
+        })
+        .catch(err => {
+            console.error("Error fetching data:", err);
+        });
+
+</script>
+
+</body>
+</html>
